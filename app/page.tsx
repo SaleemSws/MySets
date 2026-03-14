@@ -1,18 +1,21 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { Task, AIAnalysisResponse } from "@/types";
 import { 
   Sparkles, CheckCircle2, Circle, ListTodo, Plus, 
   BrainCircuit, Loader2, X, Send, Check, AlertCircle,
   TrendingUp, Heart, Sun, Star, Calendar, 
   Hash, Menu, Search, Trash2, ChevronRight,
-  Bell, Repeat, StickyNote, Coffee, ArrowRightCircle
+  Bell, Repeat, StickyNote, Coffee, ArrowRightCircle,
+  BarChart3
 } from "lucide-react";
 
 type ListType = "MyDay" | "Important" | "Planned" | "Tasks";
 
 export default function HomePage() {
+  const [now, setNow] = useState(new Date());
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeList, setActiveList] = useState<ListType>("MyDay");
   const [taskInput, setTaskInput] = useState("");
@@ -44,7 +47,18 @@ export default function HomePage() {
   const [isRescaleLoading, setIsRescaleLoading] = useState(false);
   const [rescaleResult, setRescaleResult] = useState<{ rescaledTasks: any[], encouragement: string } | null>(null);
 
-  const today = new Date().toISOString().split("T")[0];
+  // อัปเดตเวลาทุกนาที (เหมือน Python Loop)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(new Date());
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // ดึงวันที่ปัจจุบันในรูปแบบ YYYY-MM-DD แบบ Local Time (แม่นยำกว่า ISO)
+  const today = now.getFullYear() + "-" + 
+                String(now.getMonth() + 1).padStart(2, '0') + "-" + 
+                String(now.getDate()).padStart(2, '0');
 
   // Detect Burnout or Low Energy
   const hasLowEnergy = useMemo(() => {
@@ -279,27 +293,21 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: smartPrompt }),
       });
-      const newTasks = await res.json();
+      const newTasksFromAI = await res.json();
       
-      if (Array.isArray(newTasks)) {
-        const tasksWithIds = newTasks.map((h: { dueDate?: string; name: string; time?: string; category?: string; icon?: string }) => ({
-          ...h,
+      if (Array.isArray(newTasksFromAI)) {
+        const tasksWithIds: Task[] = newTasksFromAI.map((t: any) => ({
+          ...t,
           id: Math.random().toString(36).substring(7),
           isCompleted: false,
           isImportant: false,
-          category: h.category || "General",
-          myDayDate: h.dueDate === today ? today : undefined,
+          category: t.category || "Personal",
           createdAt: new Date().toISOString(),
+          // myDayDate: t.dueDate === today ? today : undefined
         }));
-        setTasks(prev => [...prev, ...tasksWithIds]);
-        
-        // Refresh insights because data changed
-        setTimeout(() => {
-          fetchTodayInsight();
-          fetchWeeklyInsight();
-        }, 500);
+        setTasks(prev => [...tasksWithIds, ...prev]);
+        setSmartPrompt("");
       }
-      setSmartPrompt("");
     } catch (error) {
       console.error("Smart Add Error:", error);
     } finally {
@@ -460,6 +468,15 @@ export default function HomePage() {
           </div>
 
           <nav className="flex-1 space-y-1">
+            <Link 
+              href="/dashboard"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all mb-6 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 group shadow-sm"
+            >
+              <BarChart3 className="w-5 h-5 text-indigo-500 group-hover:scale-110 transition-transform" />
+              <span className="font-bold flex-1 text-left text-sm">Insights Dashboard</span>
+              <ChevronRight className="w-4 h-4 text-indigo-300" />
+            </Link>
+
             <button 
               onClick={() => setActiveList("MyDay")}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${activeList === "MyDay" ? 'bg-amber-50 text-amber-700 shadow-sm' : 'hover:bg-slate-50 text-slate-600'}`}
@@ -503,13 +520,22 @@ export default function HomePage() {
       <main className={`flex-1 flex flex-col h-full overflow-hidden relative transition-all duration-300 ease-in-out`}>
         {/* Header */}
         <header className="h-14 border-b border-slate-200 bg-white flex items-center justify-between px-4">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
             <button 
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className="p-2 hover:bg-slate-100 rounded-lg"
             >
               <Menu className="w-5 h-5 text-slate-600" />
             </button>
+            <div className="flex flex-col">
+              <h2 className="font-bold text-slate-800 leading-none">{activeList === "MyDay" ? "My Day" : activeList}</h2>
+              <span className="text-[10px] font-medium text-indigo-500 mt-1 flex items-center gap-1">
+                <Calendar className="w-2.5 h-2.5" />
+                {now.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })} • 
+                <Coffee className="w-2.5 h-2.5 ml-1" />
+                {now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
           </div>
           <div className="flex-1 max-w-xl mx-4">
             <div className="relative">
@@ -531,7 +557,23 @@ export default function HomePage() {
               )}
             </div>
           </div>
-          <div className="w-10"></div>
+          <div className="flex items-center gap-3">
+            {/* Clock Widget */}
+            <div className="hidden sm:flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex flex-col items-end leading-none">
+                <span className="text-[10px] font-black text-indigo-600 uppercase tracking-tighter">
+                  {now.toLocaleDateString('th-TH', { weekday: 'short' })} {now.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}
+                </span>
+                <span className="text-sm font-bold text-slate-800 mt-0.5">
+                  {now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+              <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center shadow-sm text-indigo-500">
+                <Coffee className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="w-10"></div>
+          </div>
         </header>
 
         {/* Task Area */}

@@ -21,6 +21,7 @@ export default function HomePage() {
   const [taskInput, setTaskInput] = useState("");
   const [taskDate, setTaskDate] = useState("");
   const [taskTime, setTaskTime] = useState("");
+  const [taskIsImportant, setTaskIsImportant] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [smartPrompt, setSmartPrompt] = useState("");
   const [isSmartLoading, setIsSmartLoading] = useState(false);
@@ -120,14 +121,37 @@ export default function HomePage() {
 
   // Load tasks, logs and insights on mount
   useEffect(() => {
-    const saved = localStorage.getItem("mindful-tasks");
-    if (saved) {
-      setTasks(JSON.parse(saved));
-    }
-    const savedLogs = localStorage.getItem("mindful-task-logs");
-    if (savedLogs) {
-      setTaskLogs(JSON.parse(savedLogs));
-    }
+    const fetchTasks = async () => {
+      try {
+        const res = await fetch("/api/tasks");
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setTasks(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch tasks:", err);
+      }
+    };
+    fetchTasks();
+
+    const fetchLogs = async () => {
+      try {
+        const res = await fetch("/api/reflect");
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          // Normalize the data (map task.name to taskName for compatibility)
+          const normalizedLogs = data.map((log: any) => ({
+            ...log,
+            taskName: log.task?.name || "Unknown Task"
+          }));
+          setTaskLogs(normalizedLogs);
+        }
+      } catch (err) {
+        console.error("Failed to fetch logs:", err);
+      }
+    };
+    fetchLogs();
+
     const savedTodayInsight = localStorage.getItem("mindful-today-insight");
     if (savedTodayInsight) {
       const parsed = JSON.parse(savedTodayInsight);
@@ -143,11 +167,6 @@ export default function HomePage() {
       setWeeklyInsight(JSON.parse(savedWeeklyInsight));
     }
   }, []);
-
-  // Save tasks on change
-  useEffect(() => {
-    localStorage.setItem("mindful-tasks", JSON.stringify(tasks));
-  }, [tasks]);
 
   // Save logs and manage insights
   useEffect(() => {
@@ -223,7 +242,7 @@ export default function HomePage() {
     }
   }, [tasks, activeList, today, searchQuery]);
 
-  const addTask = () => {
+  const addTask = async () => {
     if (!taskInput.trim()) return;
 
     // Auto-Labeling Logic
@@ -234,78 +253,150 @@ export default function HomePage() {
     else if (input.includes("เรียน") || input.includes("อ่าน") || input.includes("สอบ") || input.includes("book") || input.includes("สรุป")) autoCategory = "Study";
     else if (input.includes("นัด") || input.includes("เพื่อน") || input.includes("กิน") || input.includes("เที่ยว") || input.includes("แฟน")) autoCategory = "Social";
 
-    const newTask: Task = {
-      id: Math.random().toString(36).substring(7),
+    const taskData = {
       name: taskInput,
       category: autoCategory,
       isCompleted: false,
-      isImportant: activeList === "Important",
+      isImportant: taskIsImportant || activeList === "Important",
       dueDate: taskDate || (activeList === "Planned" ? today : undefined),
       time: taskTime || undefined,
       myDayDate: activeList === "MyDay" ? today : (taskDate === today ? today : undefined),
-      createdAt: new Date().toISOString(),
     };
-    setTasks(prev => [...prev, newTask]);
-    setTaskInput("");
-    setTaskDate("");
-    setTaskTime("");
-  };
 
-  const toggleTask = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setTasks(prev => {
-      const newTasks = prev.map(t => 
-        t.id === id ? { ...t, isCompleted: !t.isCompleted } : t
-      );
-      const task = newTasks.find(t => t.id === id);
-      if (task && task.isCompleted) {
-        setReflectTask(task);
-      }
-      return newTasks;
-    });
-  };
-
-  const toggleImportant = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setTasks(prev => prev.map(t => 
-      t.id === id ? { ...t, isImportant: !t.isImportant } : t
-    ));
-  };
-
-  const deleteTask = (id: string) => {
-    if (confirm("ลบงานนี้ใช่หรือไม่?")) {
-      setTasks(prev => prev.filter(t => t.id !== id));
-      if (detailTask?.id === id) setDetailTask(null);
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(taskData),
+      });
+      const newTask = await res.json();
+      setTasks(prev => [newTask, ...prev]);
+      setTaskInput("");
+      setTaskDate("");
+      setTaskTime("");
+      setTaskIsImportant(false);
+    } catch (err) {
+      console.error("Failed to add task:", err);
     }
   };
 
-  const updateTask = (updatedTask: Task) => {
-    setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
-    setDetailTask(updatedTask);
+  const toggleTask = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+
+    const newCompletedStatus = !task.isCompleted;
+    
+    try {
+      // Optimistic Update
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, isCompleted: newCompletedStatus } : t));
+      
+      await fetch(`/api/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isCompleted: newCompletedStatus }),
+      });
+      
+      if (newCompletedStatus) {
+        setReflectTask({ ...task, isCompleted: true });
+      }
+    } catch (err) {
+      console.error("Failed to toggle task:", err);
+    }
+  };
+
+  const toggleImportant = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+
+    const newImportantStatus = !task.isImportant;
+
+    try {
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, isImportant: newImportantStatus } : t));
+      await fetch(`/api/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isImportant: newImportantStatus }),
+      });
+    } catch (err) {
+      console.error("Failed to toggle important:", err);
+    }
+  };
+
+  const deleteTask = async (id: string) => {
+    if (confirm("ลบงานนี้ใช่หรือไม่?")) {
+      try {
+        setTasks(prev => prev.filter(t => t.id !== id));
+        if (detailTask?.id === id) setDetailTask(null);
+        await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+      } catch (err) {
+        console.error("Failed to delete task:", err);
+      }
+    }
+  };
+
+  const updateTask = async (updatedTask: Task) => {
+    try {
+      setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+      setDetailTask(updatedTask);
+      await fetch(`/api/tasks/${updatedTask.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedTask),
+      });
+    } catch (err) {
+      console.error("Failed to update task:", err);
+    }
   };
 
   const handleSmartAdd = async () => {
     if (!smartPrompt.trim()) return;
     setIsSmartLoading(true);
     try {
+      const daysThai = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
       const res = await fetch("/api/smart-add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: smartPrompt }),
+        body: JSON.stringify({ 
+          prompt: smartPrompt,
+          // ส่งค่าที่ตรงกับหน้าจอเป๊ะๆ
+          localDate: today, 
+          localDayName: daysThai[now.getDay()],
+          localTime: now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', hour12: false })
+        }),
       });
       const newTasksFromAI = await res.json();
       
       if (Array.isArray(newTasksFromAI)) {
-        const tasksWithIds: Task[] = newTasksFromAI.map((t: any) => ({
-          ...t,
-          id: Math.random().toString(36).substring(7),
-          isCompleted: false,
-          isImportant: false,
-          category: t.category || "Personal",
-          createdAt: new Date().toISOString(),
-          // myDayDate: t.dueDate === today ? today : undefined
-        }));
-        setTasks(prev => [...tasksWithIds, ...prev]);
+        const savedTasks: Task[] = [];
+        
+        // วนลูปบันทึกแต่ละงานลง Database
+        for (const taskData of newTasksFromAI) {
+          const finalTaskData = {
+            name: taskData.name,
+            category: taskData.category || "Personal",
+            isCompleted: false,
+            isImportant: false,
+            dueDate: taskData.dueDate,
+            time: taskData.time,
+            myDayDate: taskData.dueDate === today ? today : undefined,
+          };
+
+          const saveRes = await fetch("/api/tasks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(finalTaskData),
+          });
+          
+          if (saveRes.ok) {
+            const savedTask = await saveRes.json();
+            savedTasks.push(savedTask);
+          }
+        }
+
+        // อัปเดต State ด้วยงานที่บันทึกสำเร็จแล้ว (มี ID จริงจาก DB)
+        setTasks(prev => [...savedTasks, ...prev]);
         setSmartPrompt("");
       }
     } catch (error) {
@@ -396,17 +487,19 @@ export default function HomePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          taskId: reflectTask.id,
           habitName: reflectTask.name,
           status,
           reflection,
+          date: today,
         }),
       });
       const feedback = await res.json();
       setAiFeedback(feedback);
 
-      // Save log
+      // Add to state with the ID from DB
       const newLog = {
-        id: Math.random().toString(36).substring(7),
+        id: feedback.id,
         taskId: reflectTask.id,
         taskName: reflectTask.name,
         date: today,
@@ -415,11 +508,11 @@ export default function HomePage() {
         burnoutRisk: feedback.burnout_risk_level,
         sentiment: feedback.sentiment_tag,
       };
-      setTaskLogs(prev => [...prev, newLog]);
+      setTaskLogs(prev => [newLog, ...prev]);
 
       // Update the task's final status in state
       setTasks(prev => prev.map(t => 
-        t.id === reflectTask.id ? { ...t, status, reflection, aiFeedback: feedback } : t
+        t.id === reflectTask.id ? { ...t, status, reflection, aiAdvice: feedback.daily_actionable_advice, burnoutRisk: feedback.burnout_risk_level } : t
       ));
     } catch (error) {
       console.error("Reflect Error:", error);
@@ -619,10 +712,7 @@ export default function HomePage() {
 
                     <div className="flex items-center justify-between px-8 pb-6">
                       <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1.5 px-2 py-1 bg-indigo-50 rounded-lg border border-indigo-100">
-                          <BrainCircuit className="w-3.5 h-3.5 text-indigo-600 animate-pulse" />
-                          <span className="text-[9px] font-black text-indigo-600 uppercase tracking-widest">Qwen 2.5 Active</span>
-                        </div>
+                        {/* Status label removed */}
                       </div>
                       <button 
                         onClick={handleSmartAdd}
@@ -925,21 +1015,21 @@ export default function HomePage() {
                       </div>
 
                       {/* AI Feedback Display */}
-                      {task.aiFeedback && (
+                      {(task.aiAdvice || task.burnoutRisk) && (
                         <div className="px-11 pb-3 space-y-2 animate-in slide-in-from-top-2 duration-300">
                           <div className="bg-slate-50/80 rounded-xl p-3 border border-slate-100">
                             <div className="flex items-center gap-2 mb-1.5">
-                              <Heart className={`w-3 h-3 ${task.aiFeedback.burnout_risk_level === 'High' ? 'text-red-500' : 'text-indigo-500'}`} />
+                              <Heart className={`w-3 h-3 ${task.burnoutRisk === 'High' ? 'text-red-500' : 'text-indigo-500'}`} />
                               <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Insight</span>
                               <span className={`ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                task.aiFeedback.burnout_risk_level === 'High' ? 'bg-red-100 text-red-600' :
-                                task.aiFeedback.burnout_risk_level === 'Medium' ? 'bg-yellow-100 text-yellow-600' : 'bg-indigo-100 text-indigo-600'
-                              }`}>Risk: {task.aiFeedback.burnout_risk_level}</span>
+                                task.burnoutRisk === 'High' ? 'bg-red-100 text-red-600' :
+                                task.burnoutRisk === 'Medium' ? 'bg-yellow-100 text-yellow-600' : 'bg-indigo-100 text-indigo-600'
+                              }`}>Risk: {task.burnoutRisk}</span>
                             </div>
-                            <p className="text-[11px] text-slate-600 italic mb-2">"{task.reflection}"</p>
+                            {task.reflection && <p className="text-[11px] text-slate-600 italic mb-2">"{task.reflection}"</p>}
                             <div className="flex items-start gap-2 bg-white/50 p-2 rounded-lg border border-slate-100/50">
                               <Sparkles className="w-3 h-3 text-amber-500 shrink-0 mt-0.5" />
-                              <p className="text-[11px] font-medium text-slate-700 leading-relaxed">{task.aiFeedback.daily_actionable_advice}</p>
+                              <p className="text-[11px] font-medium text-slate-700 leading-relaxed">{task.aiAdvice}</p>
                             </div>
                           </div>
                         </div>
@@ -952,46 +1042,74 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Quick Add Task */}
-        <div className="p-4 bg-white border-t border-slate-200">
+        {/* Improved Quick Add Task */}
+        <div className="p-4 bg-white/80 backdrop-blur-md border-t border-slate-200 sticky bottom-0 z-20">
           <div className="max-w-3xl mx-auto">
-            <div className="bg-slate-50 border border-slate-200 rounded-xl shadow-sm focus-within:bg-white focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
-              <div className="flex items-center px-4 py-2">
-                <Plus className="w-5 h-5 text-indigo-600 mr-3" />
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-xl shadow-indigo-100/50 focus-within:border-indigo-500 focus-within:ring-4 focus-within:ring-indigo-50 transition-all duration-300">
+              <div className="flex items-center px-5 py-3">
+                <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center mr-3 shrink-0">
+                   <Plus className="w-5 h-5 text-indigo-600" />
+                </div>
                 <input 
                   type="text" 
-                  placeholder="Add a task" 
-                  className="flex-1 py-2 bg-transparent border-none outline-none text-sm"
+                  placeholder="ทำอะไรต่อดี...?" 
+                  className="flex-1 py-1 bg-transparent border-none outline-none text-base font-semibold placeholder:text-slate-400"
                   value={taskInput}
                   onChange={(e) => setTaskInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addTask()}
                 />
+                
+                {/* Importance Toggle in Input */}
+                <button 
+                  onClick={() => setTaskIsImportant(!taskIsImportant)}
+                  className={`p-2 rounded-lg transition-colors ${taskIsImportant ? 'text-rose-500 bg-rose-50' : 'text-slate-300 hover:bg-slate-50'}`}
+                  title="Mark as important"
+                >
+                  <Star className={`w-5 h-5 ${taskIsImportant ? 'fill-current' : ''}`} />
+                </button>
               </div>
-              <div className="flex items-center gap-2 px-4 pb-2 border-t border-slate-100 pt-2">
-                <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  <input 
-                    type="date" 
-                    className="text-[10px] bg-transparent border-none outline-none text-slate-600 w-24"
-                    value={taskDate}
-                    onChange={(e) => setTaskDate(e.target.value)}
-                  />
+              
+              <div className="flex items-center justify-between gap-2 px-5 pb-3 border-t border-slate-50 pt-2">
+                <div className="flex items-center gap-2">
+                   {/* Quick Date Chips */}
+                   <button 
+                     onClick={() => setTaskDate(taskDate === today ? "" : today)}
+                     className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all border ${taskDate === today ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-slate-50 border-slate-100 text-slate-500 hover:border-slate-300'}`}
+                   >
+                     Today
+                   </button>
+                   
+                   <div className="h-4 w-px bg-slate-200 mx-1" />
+                   
+                   <div className="flex items-center gap-1.5">
+                      <div className="relative group">
+                        <Calendar className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-500 transition-colors" />
+                        <input 
+                          type="date" 
+                          className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-100 rounded-xl text-[10px] font-bold text-slate-600 outline-none focus:border-indigo-300 transition-all w-32"
+                          value={taskDate}
+                          onChange={(e) => setTaskDate(e.target.value)}
+                        />
+                      </div>
+                      <div className="relative group">
+                        <Coffee className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-500 transition-colors" />
+                        <input 
+                          type="time" 
+                          className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-100 rounded-xl text-[10px] font-bold text-slate-600 outline-none focus:border-indigo-300 transition-all w-28"
+                          value={taskTime}
+                          onChange={(e) => setTaskTime(e.target.value)}
+                        />
+                      </div>
+                   </div>
                 </div>
-                <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1">
-                  <Coffee className="w-3.5 h-3.5 text-slate-400" />
-                  <input 
-                    type="time" 
-                    className="text-[10px] bg-transparent border-none outline-none text-slate-600 w-20"
-                    value={taskTime}
-                    onChange={(e) => setTaskTime(e.target.value)}
-                  />
-                </div>
+
                 <button 
                   onClick={addTask}
                   disabled={!taskInput.trim()}
-                  className="ml-auto text-xs font-bold text-indigo-600 hover:text-indigo-700 disabled:opacity-40"
+                  className="bg-slate-900 hover:bg-black disabled:opacity-20 text-white px-6 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all active:scale-95 flex items-center gap-2"
                 >
-                  Add
+                  <Plus className="w-4 h-4" />
+                  Add Task
                 </button>
               </div>
             </div>

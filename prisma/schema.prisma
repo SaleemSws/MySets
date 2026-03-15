@@ -1,0 +1,50 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Task {
+  id           String     @id @default(cuid())
+  name         String
+  category     String     @default("Personal")
+  isImportant  Boolean    @default(false)
+  isCompleted  Boolean    @default(false)
+  dueDate      String?
+  time         String?
+  myDayDate    String?
+  note         String?
+  
+  // ฟิลด์สำหรับเก็บการสะท้อนความรู้สึกและ AI Insights
+  status       String?    // done, partial, skipped
+  reflection   String?
+  sentiment    String?
+  burnoutRisk  String?
+  aiAdvice     String?
+  
+  aiFeedback   Json?      // เก็บสำรองข้อมูล AI ทั้งหมด
+  subtasks     Json?      // เก็บรายการขั้นตอนที่ AI ย่อยให้ [string, string, ...]
+  
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  
+  logs         HabitLog[]
+}
+
+model HabitLog {
+  id           String   @id @default(cuid())
+  taskId       String
+  task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  date         String   // YYYY-MM-DD
+  status       String   // done, partial, skipped
+  reflection   String?
+  sentiment    String?
+  burnoutRisk  String?
+  aiAdvice     String?
+  createdAt    DateTime @default(now())
+}
